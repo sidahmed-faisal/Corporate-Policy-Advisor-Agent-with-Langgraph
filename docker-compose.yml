@@ -1,0 +1,50 @@
+version: "3.9"
+
+services:
+  # ── Optional: persistent Qdrant instance ───────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    profiles:
+      - with-qdrant   # only starts when: docker compose --profile with-qdrant up
+
+  # ── Policy Advisor API ─────────────────────────────────────────────────────
+  policy-advisor:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - CORPUS_DIR=/app/policy_corpus
+      - METADATA_FILE=/app/policy_corpus/metadata.json
+      # Uncomment to use persistent Qdrant instead of in-memory:
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      - ./policy_corpus:/app/policy_corpus:ro
+    depends_on:
+      - qdrant
+    profiles:
+      - with-qdrant
+    restart: unless-stopped
+
+  # ── Standalone (in-memory Qdrant, no external services) ───────────────────
+  policy-advisor-standalone:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - CORPUS_DIR=/app/policy_corpus
+      - METADATA_FILE=/app/policy_corpus/metadata.json
+      - QDRANT_URL=    # blank = in-memory
+    volumes:
+      - ./policy_corpus:/app/policy_corpus:ro
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:

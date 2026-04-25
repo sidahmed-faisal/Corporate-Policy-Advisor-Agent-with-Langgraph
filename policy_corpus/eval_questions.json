@@ -1,0 +1,99 @@
+{
+  "version": "1.0",
+  "note_to_candidate": "These 15 questions exercise the same failure modes the reviewer's held-out set will test, but the reviewer uses a similar but different set when grading. Building to pass only these specific questions will hurt your score. Use these to validate your system end-to-end.",
+  "questions": [
+    {
+      "id": "Q01",
+      "type": "single_doc",
+      "question": "What is the standard notice period at Meridian?",
+      "expected_language": "en"
+    },
+    {
+      "id": "Q02",
+      "type": "single_doc",
+      "question": "What is the hotel cap per night for business travel to Europe?",
+      "expected_language": "en"
+    },
+    {
+      "id": "Q03",
+      "type": "single_doc",
+      "question": "What is the procurement approval threshold for purchases above AED 50,000?",
+      "expected_language": "en"
+    },
+    {
+      "id": "Q04",
+      "type": "single_doc",
+      "question": "How long are employee records retained after termination?",
+      "expected_language": "en"
+    },
+    {
+      "id": "Q05",
+      "type": "single_doc",
+      "question": "ما هي إجازة الحداد المخصصة للموظفين في حالة وفاة أحد أفراد الأسرة المباشرة؟",
+      "expected_language": "ar"
+    },
+    {
+      "id": "Q06",
+      "type": "composition",
+      "question": "If I travel from Dubai to Abu Dhabi for a meeting with a UAE government client, what approvals and expense rules apply?",
+      "expected_language": "en"
+    },
+    {
+      "id": "Q07",
+      "type": "composition",
+      "question": "I want to expense a client dinner of AED 1,800 using my corporate card. What do I need to do?",
+      "expected_language": "en"
+    },
+    {
+      "id": "Q08",
+      "type": "composition",
+      "question": "What's the total leave I can take in my first year for the birth of a child, combining paternity and annual leave?",
+      "expected_language": "en"
+    },
+    {
+      "id": "Q09",
+      "type": "composition",
+      "question": "A new vendor needs to be onboarded urgently for a project requiring a contract of AED 200,000. What are the steps and approvals?",
+      "expected_language": "en"
+    },
+    {
+      "id": "Q10",
+      "type": "contradiction",
+      "question": "How many days of paternity leave am I entitled to?",
+      "expected_language": "en",
+      "hint_for_candidate": "This is a trick question — two documents disagree. Your agent must surface the conflict."
+    },
+    {
+      "id": "Q11",
+      "type": "contradiction",
+      "question": "What's my annual training budget?",
+      "expected_language": "en",
+      "hint_for_candidate": "Also contradicted between two documents."
+    },
+    {
+      "id": "Q12",
+      "type": "contradiction",
+      "question": "Can I carry forward unused sick days to next year?",
+      "expected_language": "en",
+      "hint_for_candidate": "Two documents have opposing positions."
+    },
+    {
+      "id": "Q13",
+      "type": "supersession",
+      "question": "How many days per week can I work remotely?",
+      "expected_language": "en"
+    },
+    {
+      "id": "Q14",
+      "type": "supersession",
+      "question": "How far in advance do I need to submit a travel request?",
+      "expected_language": "en"
+    },
+    {
+      "id": "Q15",
+      "type": "out_of_scope",
+      "question": "What is Meridian's stock ticker symbol?",
+      "expected_language": "en"
+    }
+  ]
+}
