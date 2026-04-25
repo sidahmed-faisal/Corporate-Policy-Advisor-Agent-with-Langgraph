@@ -143,6 +143,7 @@ venv.bak/
 # Rope project settings
 .ropeproject
 
+policy_corpus/
 # mkdocs documentation
 /site
 
