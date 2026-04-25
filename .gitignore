@@ -181,4 +181,4 @@ cython_debug/
 .cursorindexingignore
 
 
-.policy_corpus/
+./policy_corpus
