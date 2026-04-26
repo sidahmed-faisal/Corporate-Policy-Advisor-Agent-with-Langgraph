@@ -58,9 +58,6 @@ def _llm(prompt: str) -> str:
     return get_llm().invoke([HumanMessage(content=prompt)]).content.strip()
 
 
-def _detect_language(text: str) -> str:
-    return "ar" if sum(1 for c in text if "\u0600" <= c <= "\u06ff") > 3 else "en"
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tools — the LLM decides which to call and when
@@ -119,6 +116,7 @@ def check_for_contradictions(chunks_json: str, question: str) -> str:
     sick days, training budget, or expense limits — these areas have known
     conflicts between documents.
 
+    # IMPORTANT: read the FULL text of every chunk before calling this tool. The chunks should address the same policy area to use this tool effectively.
     Args:
         chunks_json: JSON string — the list of chunk dicts from retrieve_policy.
         question: The original employee question.
@@ -245,7 +243,7 @@ Reasoning protocol (follow in order):
    call get_doc_metadata to confirm which version is current.
 
 4. CHECK CONTRADICTIONS — if chunks from more than one document address the same
-   topic, call check_for_contradictions. Mandatory for: leave, sick days,
+   topic and policy area, call check_for_contradictions. Mandatory for: leave, sick days,
    training budget, expenses.
 
 5. DRAFT — compose your answer using ONLY information from the retrieved chunks.
