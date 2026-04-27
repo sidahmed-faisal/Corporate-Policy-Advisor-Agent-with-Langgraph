@@ -398,6 +398,21 @@ Gemini's "always run the full pipeline" behaviour is wasteful on simple question
 
 ---
 
+### Links for Runs and datasets used for evaluation:
+
+#### Runs examples: 
+
+* https://smith.langchain.com/public/917f7650-5e3f-4dc4-b350-5c1ee7df3312/r
+* https://smith.langchain.com/public/3d6ea398-1805-4a91-bcb4-e65eb2d16d8c/r
+* https://smith.langchain.com/public/93f60cb9-b61b-480f-8359-015fa7de8411/r
+
+#### Datasets for Gemini vs gpt-4o: 
+
+* Gemini: https://smith.langchain.com/public/27f584c7-3231-47f8-ae43-c6a45a0bd995/d
+* gpt-4o: https://smith.langchain.com/public/44d49de8-af1c-4bc6-b84a-92f5729416e4/d
+
+---
+
 ### Summary of judgement calls
 
 | Dimension | Winner | Caveat |
@@ -524,3 +539,8 @@ The current fixed-size chunking can split a policy clause mid-sentence. Structur
 3. **Cross-encoder reranking** — Add a local `ms-marco` cross-encoder between RRF fusion and the agent (currently no reranker runs), using a single batched CPU inference call to rescore the top-20 fused candidates and return the top-5 — higher precision at well under a second of added latency.
 4. **Version-aware multi-turn** — Track conversation history in LangGraph state so employees can ask follow-up questions ("what about the old policy?") without re-stating context.
 5. **Automatic contradiction discovery** — Offline job that runs `check_contradictions` over all document pairs in the same category and stores the results, so contradiction detection at query time is O(1) lookup rather than an LLM call.
+
+
+## Walkthrough the execution of the project:
+
+* https://www.loom.com/share/a1b31c86278b45a48fd31afaaeb26d1f
