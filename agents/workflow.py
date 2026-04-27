@@ -55,7 +55,13 @@ class AgentState(TypedDict):
 # Helper for tool implementations that need an LLM call
 # ─────────────────────────────────────────────────────────────────────────────
 def _llm(prompt: str) -> str:
-    return get_llm().invoke([HumanMessage(content=prompt)]).content.strip()
+    response = get_llm().invoke([HumanMessage(content=prompt)])
+    content = response.content
+    if isinstance(content, list):
+        # Gemini returns a list of blocks when thought signatures are present
+        parts = [b["text"] for b in content if isinstance(b, dict) and "text" in b]
+        content = "\n".join(parts)
+    return content.strip()
 
 
 
