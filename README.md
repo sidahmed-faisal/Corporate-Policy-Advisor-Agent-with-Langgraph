@@ -1,7 +1,5 @@
-# Agentic RAG Policy Advisor — Meridian Consulting
+# Agentic RAG Policy Advisor 
 
-**Assessment reference:** AIE-2026-01  
-**Candidate:** Sidahmed Faisal
 
 ---
 
@@ -9,51 +7,53 @@
 
 An agentic RAG assistant that answers employee questions about corporate policy documents. It handles three failure modes that naive RAG cannot:
 
-1. **Contradictions** — surfaces conflicts between documents instead of silently picking one  
-2. **Supersession** — answers from the current policy version by default (respects `metadata.json`)  
-3. **Composition** — decomposes multi-document questions and synthesises a single grounded answer
+1. **Contradictions** — surfaces conflicts between documents instead of silently picking one
+2. **Supersession** — answers from the current policy version by default (respects `metadata.json`)
+3. **Composition** — combines information across multiple documents into a single grounded answer
 
 ---
 
 ## Architecture
 
+The system is a single ReAct-style agent loop. The LLM reasons through every step — planning, retrieval, contradiction checking, fact-checking — by deciding which tools to call and in what order.
+
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                         FastAPI  /ask  endpoint                        │
-└──────────────────────────────────┬─────────────────────────────────────┘
-                                   │
-                        ┌──────────▼──────────┐
-                        │   LangGraph Graph    │
-                        │                     │
-                        │  ┌───────────────┐  │
-                        │  │  Planner Agent│  │  ← orchestrates strategy
-                        │  │  (Agent 1)    │  │    single_doc / multi_doc /
-                        │  └──────┬────────┘  │    out_of_scope
-                        │         │           │
-                        │  ┌──────▼────────┐  │
-                        │  │Retriever Agent│  │  ← hybrid search + rerank
-                        │  │  (Agent 2)    │  │    + contradiction check
-                        │  └──────┬────────┘  │
-                        │         │           │
-                        │  ┌──────▼────────┐  │
-                        │  │FactCheck Agent│  │  ← validates every sentence
-                        │  │  (Agent 3)    │  │    against retrieved chunks
-                        │  └──────┬────────┘  │
-                        └─────────┼───────────┘
-                                  │
-                         Structured JSON response
-                    (answer · citations · confidence · trace)
+                    ┌─────────────────────────────────────┐
+                    │         FastAPI  /ask  endpoint      │
+                    └──────────────────┬──────────────────┘
+                                       │
+                    ┌──────────────────▼──────────────────┐
+                    │           LangGraph (3 nodes)        │
+                    │                                      │
+                    │   ┌─────────┐     ┌─────────────┐   │
+                    │   │  agent  │────▶│    tools    │   │
+                    │   │  (LLM)  │◀────│  (ToolNode) │   │
+                    │   └────┬────┘     └─────────────┘   │
+                    │        │ no more tool_calls          │
+                    │   ┌────▼────┐                        │
+                    │   │finalize │                        │
+                    │   └─────────┘                        │
+                    └──────────────────────────────────────┘
+                                       │
+                          Structured JSON response
+                   (answer · citations · confidence · trace)
 
-Retrieval Stack:
-  Qdrant (dense, cosine)  +  BM25Okapi  →  RRF fusion  →  LLM reranker
-  Embeddings: BAAI/bge-small-en-v1.5 (local, no API key needed)
+Tools the LLM can call:
+  retrieve_policy          — hybrid Qdrant dense + BM25 search
+  get_doc_metadata         — version and supersession chain lookup
+  check_for_contradictions — conflict detection across retrieved docs
+  verify_and_finalize      — fact-check draft and produce final answer
 
-Document Parsing:
+Retrieval stack:
+  Qdrant (dense cosine)  +  BM25Okapi  →  RRF fusion
+  Embeddings: nomic-ai/nomic-embed-text-v1.5 (local, no API key needed)
+
+Document parsing:
   PDF  → PyMuPDF (fitz) → markdown
   DOCX → python-docx    → markdown
   MD   → plain read
 
-Tracing: LangSmith (LANGCHAIN_TRACING_V2=true)
+Tracing: LangSmith (set LANGCHAIN_TRACING_V2=true)
 ```
 
 ---
@@ -64,38 +64,113 @@ Tracing: LangSmith (LANGCHAIN_TRACING_V2=true)
 
 - Python 3.11+
 - Policy corpus unzipped to `./policy_corpus/`
+- (Optional) A running Qdrant instance — if you skip this, Qdrant runs in-process in memory and the index is rebuilt on every cold start
 
-### 1. Install
+---
+
+### Option A — Local development without Docker (recommended for iteration)
+
+This is the fastest setup for development: a Python virtual environment plus a single Qdrant binary running on your machine. No Docker daemon required.
+
+#### 1. Create and activate a virtual environment
 
 ```bash
+# macOS / Linux
+python3.11 -m venv .venv
+source .venv/bin/activate
+
+# Windows (PowerShell)
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+Confirm you are in the venv:
+
+```bash
+which python   # should point to .../.venv/bin/python
+python --version  # 3.11.x
+```
+
+#### 2. Install dependencies
+
+```bash
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 2. Configure
+The first install takes 2–4 minutes — `sentence-transformers` will download the embedding model (`nomic-ai/nomic-embed-text-v1.5`, ~550 MB) into `~/.cache/huggingface/` on first use, not at install time.
+
+#### 3. Run a local Qdrant instance (persistent)
+
+
+**Option 1 — Native Qdrant binary (no Docker, fastest startup)**
+
+Download the platform-specific release from the [Qdrant releases page](https://github.com/qdrant/qdrant/releases) and extract:
+
+```bash
+# macOS (Apple Silicon) — adjust version to latest
+curl -L -o qdrant.tar.gz \
+  https://github.com/qdrant/qdrant/releases/latest/download/qdrant-aarch64-apple-darwin.tar.gz
+tar -xzf qdrant.tar.gz
+
+# Run it (data persists in ./qdrant_storage)
+./qdrant
+```
+
+Qdrant will listen on `http://localhost:6333` (REST) and `:6334` (gRPC). Leave this terminal running.
+
+#### 4. Configure environment
 
 ```bash
 cp .env.example .env
-# Edit .env — set GEMINI_API_KEY (free tier works)
-# Set LANGCHAIN_API_KEY if you want LangSmith tracing
 ```
 
-### 3. Ingest + Ask (CLI)
+Edit `.env`:
 
 ```bash
-# Ingest happens automatically on first question
+LLM_PROVIDER=gemini                                # or openai | anthropic
+GEMINI_API_KEY=your-gemini-api-key-here
+
+# If you ran a local Qdrant binary in step 3:
+QDRANT_URL=http://localhost:6333
+QDRANT_COLLECTION=policy_docs
+
+# If you skipped Qdrant (Option A.2): leave QDRANT_URL blank
+# QDRANT_URL=
+
+# Optional — LangSmith tracing
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=ls__your-key
+LANGCHAIN_PROJECT=rag-policy-advisor
+
+CORPUS_DIR=./policy_corpus
+METADATA_FILE=./policy_corpus/metadata.json
+```
+
+#### 5. Ingest + ask (CLI)
+
+The first question triggers ingestion automatically. To force ingestion up front:
+
+```bash
+python -c "from ingestion.ingest import ingest_corpus; import config; print(ingest_corpus(config.CORPUS_DIR, config.METADATA_FILE), 'chunks indexed')"
+```
+
+Then ask:
+
+```bash
 python ask.py "What is the standard notice period at Meridian?"
 python ask.py "ما هي إجازة الحداد المخصصة للموظفين؟"   # Arabic works
 ```
 
-### 4. Start the API
+#### 6. Start the API
 
 ```bash
 uvicorn api.app:app --reload --port 8000
-# or:
+# or
 python -m api.app
 ```
 
-API docs available at `http://localhost:8000/docs`
+Interactive docs: `http://localhost:8000/docs`
 
 ```bash
 curl -X POST http://localhost:8000/ask \
@@ -103,7 +178,7 @@ curl -X POST http://localhost:8000/ask \
   -d '{"question": "How many days of paternity leave am I entitled to?"}'
 ```
 
-### 5. Run Evaluation Harness
+#### 7. Run the evaluation harness
 
 ```bash
 python evaluate.py \
@@ -111,18 +186,23 @@ python evaluate.py \
   --output results.json
 ```
 
-### 6. Docker
+#### 8. Tear down
 
 ```bash
-# Standalone (in-memory Qdrant, no extra services)
-docker build -t policy-advisor .
-docker run -p 8000:8000 \
-  -v $(pwd)/policy_corpus:/app/policy_corpus:ro \
-  --env-file .env \
-  policy-advisor
+# Stop the API (Ctrl-C in its terminal)
+# Stop Qdrant   (Ctrl-C in its terminal)
+deactivate                       # exit the venv
+rm -rf qdrant_storage            # optional — wipe persisted vectors
+```
 
-# With persistent Qdrant
-docker compose --profile with-qdrant up
+---
+
+### Option B — Docker / Docker Compose
+
+```bash
+
+# API + persistent Qdrant
+docker compose up
 ```
 
 ---
@@ -173,57 +253,165 @@ python evaluate.py --questions policy_corpus/eval_questions.json --output result
 
 ---
 
-## Agent Walkthrough
+## Agent Walkthrough — Comparative Behaviour on Real Traces
 
-### Example 1: Contradiction Question (Q10 — Paternity Leave)
+This section walks through the actual LangSmith-captured traces from running the same nine-question evaluation against two LLM backends:
+
+- **`gemini-3-flash-preview`** (`LLM_PROVIDER=gemini`)
+- **`gpt-4o`** (`LLM_PROVIDER=openai`)
+
+The traces are in `Gemini_policy_test.jsonl` and `OpenAI_policy_test.jsonl`. The agent loop, prompts, retrieval stack, and tool definitions are identical between runs — only the model is swapped via `LLM_PROVIDER`. Differences in behaviour below therefore reflect how each model *uses* the same toolset.
+
+The four tools the agent exposes:
+
+| Tool | Purpose |
+|------|---------|
+| `retrieve_policy(query, filter_superseded=True)` | Hybrid retrieval (Qdrant dense + BM25 + RRF fusion). The `filter_superseded` flag drops chunks whose `superseded_by` payload is non-null. |
+| `get_doc_metadata(doc_id)` | Returns the version, effective date, and supersession chain for a single doc. |
+| `check_for_contradictions(question, chunks_json)` | LLM-judges whether the retrieved chunks disagree on the answer. |
+| `verify_and_finalize(question, chunks_json, draft_answer)` | Sentence-level groundedness check; returns the final answer + citations + confidence. |
+
+### Headline numbers
+
+| Question type | Gemini tool calls | GPT-4o tool calls | Gemini graph steps | GPT-4o graph steps |
+|---|---|---|---|---|
+| Single-doc — notice period | 3 | **1** | 8 | **4** |
+| Single-doc — Europe hotel cap | 3 | **1** | 8 | **4** |
+| Arabic — bereavement leave | 3 | **1** | 8 | **4** |
+| Supersession — travel request lead time | 4 | **1** | 10 | **4** |
+| Supersession — remote work days | 5 | **1** | 12 | **4** |
+| Contradiction — paternity leave | 3 | 3 | 8 | 8 |
+| Contradiction — sick-day carry-forward | 5 | 3 | 12 | 8 |
+| Composition — birth-of-child total leave (run 1) | 5 | 4 | 8 | 8 |
+| Composition — birth-of-child total leave (run 2) | 6 | 4 | 10 | 8 |
+
+GPT-4o averages **2× fewer tool calls** and **1.5–3× fewer graph steps** per question. Lower step counts translate directly into lower latency and lower token cost (each agent step on Gemini is a separate LLM round-trip with the full tool schema in context). On a free Gemini-3-flash-preview tier where rate limits and ~1–3 s/step latency dominate end-to-end time, this gap is significant.
+
+The reason for the gap, however, is not "GPT-4o is smarter" — it is that **GPT-4o reads and uses the `filter_superseded` parameter on the retrieval tool, while Gemini-3-flash-preview ignores it on every single question**. The behavioural consequences are most visible on the supersession cases.
+
+---
+
+### Case 1 — Supersession: "How far in advance do I need to submit a travel request?"
+
+**Ground truth.** The corpus contains both `POL-TRAVEL-001` (7 working days, superseded) and `POL-TRAVEL-001-v2` (10 working days, current as of 2025-09-01). The expected answer is **10 working days**, citing the v2 doc.
+
+**GPT-4o trace** (1 tool call, 4 graph steps):
 
 ```
-User: "How many days of paternity leave am I entitled to?"
-
-[Planner Agent]
-→ strategy: "multi_doc"
-→ requires_contradiction_check: true
-→ sub_queries: ["paternity leave days", "paternity leave entitlement"]
-
-[Retriever Agent]
-→ Dense search (Qdrant): hits POL-HR-002, POL-HR-003
-→ BM25 search: hits same docs, also POL-HR-001
-→ RRF fusion: scores merged
-→ LLM reranker: top 5 chunks selected
-→ check_contradictions(): LLM detects POL-HR-002 vs POL-HR-003 disagree
-→ Draft answer includes: "⚠️ POL-HR-002 says X, POL-HR-003 says Y"
-
-[FactChecker Agent]
-→ Every sentence checked against chunks
-→ Conflict statement supported by both chunks → kept
-→ confidence: "medium" (surfaced conflict = expected behavior)
+→ retrieve_policy(query="travel request submission deadline", filter_superseded=True)
+   ↳ Qdrant pre-filters out POL-TRAVEL-001; only v2 returned
+✓ Final answer (no verify_and_finalize call): "10 working days … updated from 7 to 10
+  as of September 1, 2025 [POL-TRAVEL-001-v2]"
 ```
 
-### Example 2: Composition Question (Q06 — UAE Travel)
+GPT-4o trusts the retrieval filter. One round-trip, correct answer. **However** — because it skipped `verify_and_finalize`, the response shipped with `confidence: low` and an empty `citations: []` array even though the doc ID is in the answer text. **This is a real defect in agent prompt design**: GPT-4o's "I'm done" heuristic kicks in too early and the structured citation block never gets populated. A user reading the JSON envelope would see a low-confidence answer with no machine-readable citations, which is worse for downstream consumers than a slower-but-fully-populated Gemini response.
+
+**Gemini-3-flash-preview trace** (4 tool calls, 10 graph steps):
 
 ```
-User: "If I travel from Dubai to Abu Dhabi for a meeting with a UAE government
-       client, what approvals and expense rules apply?"
-
-[Planner Agent]
-→ strategy: "multi_doc"
-→ expected_categories: ["Travel", "Finance", "Client"]
-→ sub_queries: [
-    "UAE business travel client site approvals",
-    "per diem Dubai Abu Dhabi expense",
-    "government client engagement rules"
-  ]
-
-[Retriever Agent]
-→ 3 sub-queries → hits across POL-TRAVEL-001-v2, POL-TRAVEL-002,
-  POL-TRAVEL-003, POL-CLIENT-001
-→ Supersession filter removes POL-TRAVEL-001 (old version)
-→ Draft composes: approval chain + per diem + engagement rules
-
-[FactChecker Agent]
-→ Each composed sentence traced to a specific chunk
-→ confidence: "high"
+→ retrieve_policy(query="travel request submission lead time")          ← no filter
+→ retrieve_policy(query="travel request form submission deadline")      ← retry, broader
+→ check_for_contradictions(...)                                          ← v1 vs v2 chunks both present
+→ verify_and_finalize(draft_answer="...10 working days [POL-TRAVEL-001-v2]...")
+✓ Final answer: same 10 working days, but also adds nuance from POL-TRAVEL-003 about
+  same-day intra-UAE travel. confidence: high, citations: [POL-TRAVEL-001-v2, POL-TRAVEL-003]
 ```
+
+Gemini *infers* supersession from the chunk content rather than filtering it pre-retrieval. Both v1 and v2 land in the candidate set; the model reads the effective dates inside the chunks and the version suffix in the doc IDs (`-v2`), then composes an answer from v2 only. It also detours into a contradiction check that returns no conflict (the two travel-request lead times are not really a "contradiction" once supersession is accounted for — they are just one being out of date).
+
+**Critical assessment.** Gemini reaches the right answer through the wrong mechanism. Inference-from-text works *here* because the doc ID literally contains `-v2`; on a corpus where superseded versions share a doc ID and only differ on `effective_date` payload, this strategy would fail. The intended design — supersession handled by the retrieval filter — is what GPT-4o exercises and Gemini bypasses.
+
+### Case 2 — Supersession: "How many days per week can I work remotely?"
+
+The pattern is identical and even more pronounced.
+
+| Metric | GPT-4o | Gemini-3-flash-preview |
+|---|---|---|
+| Tool calls | **1** (retrieve_policy with filter_superseded=True) | **5** (3× retrieve_policy + get_doc_metadata + verify_and_finalize) |
+| Graph steps | 4 | 12 |
+| Final answer | "3 days per week … remote-first roles exempt" | Same answer, plus 4 extra bullets on core hours and office expectations |
+| Citations | `[]` (empty due to skipped verify) | `[POL-HR-004-v2, POL-IT-002]` |
+| Confidence | `low` | `high` |
+
+Gemini explicitly calls `get_doc_metadata(doc_id="POL-HR-004-v2")` to confirm it is the live version — useful belt-and-braces, but redundant given that the metadata file was already used to populate the Qdrant payloads at ingestion time. **Both filtering at retrieval time (GPT-4o) and confirming via metadata lookup (Gemini) reach the correct policy**; the filter-based path is roughly 5× cheaper in tool calls.
+
+### Case 3 — Contradiction: "How many days of paternity leave am I entitled to?"
+
+This is where the two models converge.
+
+```
+Both models:
+→ retrieve_policy(...)              ← pulls POL-HR-002 (5 days) and POL-HR-003 (7 days)
+→ check_for_contradictions(...)     ← returns has_contradiction=true
+→ verify_and_finalize(...)
+✓ confidence: high, citations: [POL-HR-002, POL-HR-003]
+```
+
+Both surface the conflict. The answers diverge in style:
+
+- **GPT-4o** is terse: `"⚠️ Conflict: POL-HR-002 says 5 working days, POL-HR-003 says 7 working days. Please verify with HR."`
+- **Gemini** quotes more of the source and adds the precedence rule from the handbook: `"POL-HR-003 explicitly notes that where its summaries conflict with standalone policy documents, the standalone policy is authoritative."` That nuance is genuinely present in the corpus and Gemini surfaces it; GPT-4o omits it.
+
+For a user, Gemini's answer is more actionable. For an evaluator scoring "did the agent flag the conflict?", both pass.
+
+### Case 4 — Contradiction: "Can I carry forward unused sick days to next year?"
+
+Now the models *diverge in correctness*.
+
+The corpus contains:
+- `POL-HR-011` (Wellness Leave): allows up to 10 days carry-forward
+- `POL-HR-001` (Leave — General Overview): "sick leave does not accumulate across years"
+
+These genuinely contradict.
+
+**GPT-4o** retrieved only `POL-HR-011`. `check_for_contradictions` ran on a single-document set and returned no conflict. Final answer: `"Yes, up to 10 days … encourages employees to take sick leave when genuinely needed."` Confident, single-cited, and **silently wrong about the existence of a conflicting policy**. Confidence reported as `medium` — the only signal a downstream consumer has.
+
+**Gemini** retrieved both POL-HR-011 and POL-HR-001 (likely because BM25 caught "sick leave" in the general overview), called `get_doc_metadata` on each, ran the contradiction checker, and produced: `"⚠️ Conflict: POL-HR-011 allows 10 days carry-forward, POL-HR-001 says sick leave does not accumulate. POL-HR-011 is the more specific document and likely represents current practice — verify with HR."`
+
+**This is the recall-limited contradiction failure mode the original "Known Weaknesses" section calls out, made concrete.** GPT-4o's parsimonious one-shot retrieval missed a conflicting document; Gemini's broader retrieval (2 hits with different lexical anchors) caught it. The fix — running a second retrieval pass scoped to the same category as the first hit — would close this gap regardless of which model is driving.
+
+### Case 5 — Composition: "Total leave in first year combining paternity and annual leave"
+
+Both models correctly identify this requires composing across `POL-HR-002` (paternity) and `POL-HR-001` (annual leave), and both surface the paternity-leave conflict that bleeds in from the previous case.
+
+| Metric | GPT-4o | Gemini |
+|---|---|---|
+| Tool calls | 4 | 5–6 (varies across the two recorded runs) |
+| Final number | "27 to 29 days, depending on the correct paternity entitlement" | "27 working days" with the conflict noted as a side annotation |
+| Citations | `[POL-HR-001, POL-HR-002, POL-HR-003]` | Same three docs |
+
+Two judgement calls visible in these traces:
+
+1. **GPT-4o hedges in the headline number.** It refuses to commit to a single figure because of the upstream paternity-leave conflict. Defensible but less directly useful.
+2. **Gemini commits to 27 days** (using POL-HR-002's 5-day figure as authoritative because POL-HR-003 itself defers to standalone policies) and notes the conflict as a footnote. More useful, more interpretive, and arguably leaning further from the ground truth than GPT-4o is comfortable with.
+
+Neither answer is wrong; they reflect different failure modes for ambiguous source content. A corporate deployment would likely prefer Gemini's behaviour for end-user UX and GPT-4o's for compliance/audit contexts.
+
+### Case 6 — Single-doc & Arabic
+
+For the three "easy" questions (notice period, hotel cap, Arabic bereavement leave):
+
+- **GPT-4o**: 1 retrieval, no verify, correct answer, but `confidence: low` and `citations: []` in the JSON envelope on every one of these.
+- **Gemini**: 3 tool calls every time (retrieve → check_for_contradictions → verify_and_finalize), correct answer, `confidence: high`, citations populated.
+
+Gemini's "always run the full pipeline" behaviour is wasteful on simple questions but produces fully-populated structured output. GPT-4o's "I have enough, stop calling tools" behaviour is efficient but **trips a bug in the agent prompt where confidence and citations only get set when `verify_and_finalize` runs**. This is the single most actionable finding from the comparison — the agent prompt should require `verify_and_finalize` as the terminal step regardless of model.
+
+---
+
+### Summary of judgement calls
+
+| Dimension | Winner | Caveat |
+|---|---|---|
+| Tool-call efficiency | GPT-4o | But skips `verify_and_finalize` ⇒ empty citations/low confidence in the response envelope |
+| Tool semantics (uses `filter_superseded`) | GPT-4o | Gemini-3-flash-preview ignores the parameter and infers from chunk content instead |
+| Supersession correctness | Tie | GPT-4o via filter, Gemini via inference; both arrive at the right policy |
+| Contradiction recall | Gemini | GPT-4o's single-shot retrieval missed the POL-HR-001 vs POL-HR-011 conflict on sick days |
+| Answer richness / nuance | Gemini | Surfaces precedence rules, edge cases, document hierarchy |
+| Latency / cost | GPT-4o | Roughly half the tool calls and graph steps on this evaluation |
+| Structured-output quality | Gemini | Confidence and citations are reliably populated |
+| Cross-lingual (Arabic) | Tie | Both produce a fluent Arabic answer; Gemini's includes citations in the envelope |
+
+The fact that both models reach correct final answers on 8/9 questions despite using the toolset very differently is itself evidence that the agent loop is working: even when one model bypasses an intended affordance (the retrieval filter), the loop's other safety nets (broader retrieval, contradiction check, verification) compensate. The 1/9 miss is the GPT-4o sick-day case, which is a retrieval-recall problem, not a model problem.
 
 ---
 
@@ -233,11 +421,11 @@ User: "If I travel from Dubai to Abu Dhabi for a meeting with a UAE government
 
 | Signal  | Weight | Why |
 |---------|--------|-----|
-| Dense (BGE embeddings) | 0.7 | Catches semantic paraphrases ("annual holiday" → "annual leave") |
+| Dense (Nomic embeddings) | 0.7 | Catches semantic paraphrases ("annual holiday" → "annual leave") |
 | BM25 | 0.3 | Catches exact policy names and codes (e.g., "POL-HR-002") |
 | RRF fusion (k=60) | — | Rank-order fusion — robust to score magnitude differences |
 
-After fusion, an LLM-based pointwise reranker scores each chunk 0–10 for relevance to the question and selects the top 5.
+After fusion, the top-K (default 8, configurable via `TOP_K`) RRF-ranked chunks are returned directly to the agent — there is no separate reranking stage. See *Known Weaknesses §2* for why a cross-encoder reranker is the obvious next addition.
 
 ### Chunking
 
@@ -267,7 +455,7 @@ LANGCHAIN_PROJECT=rag-policy-advisor
 
 Every `run_agent()` call produces a full trace in LangSmith showing:
 - Planner node input/output (plan JSON)
-- Retriever node: sub-queries, Qdrant hits, BM25 hits, RRF scores, reranking, contradiction detection
+- Retriever node: sub-queries, Qdrant hits, BM25 hits, RRF scores, contradiction detection
 - FactChecker node: unsupported sentences removed, final citations
 
 ---
@@ -315,19 +503,15 @@ Returns `{"status": "ok", "ingested": true, "llm_provider": "gemini"}`.
 
 The BM25 index is rebuilt in-memory on every startup (triggered on first question). This adds ~5-15 seconds cold-start latency. **Fix:** Persist BM25 index to disk (pickle) or replace with Qdrant's built-in sparse vector support.
 
-### 2. LLM reranker is expensive for large result sets
+### 2. No reranking stage after RRF fusion
 
-Reranking 20 chunks with individual LLM calls (one per chunk) costs ~20 API round-trips. On Gemini free tier this is slow (~30-60s for large queries). **Fix:** Use a cross-encoder model locally (e.g., `cross-encoder/ms-marco-MiniLM-L-6-v2`) which runs in a single batch.
+Retrieval ends at RRF fusion of the dense and BM25 hit lists — the top-K RRF-ranked chunks are passed straight to the agent, with no second-pass scoring. This is fine for a small corpus where lexical and semantic signals already agree closely on the top results, but it leaves precision on the table on harder queries: RRF is a rank-only fusion, so it cannot tell apart a chunk that mentions all the query terms in passing from one that *answers* the question. **Fix:** add a cross-encoder reranker between fusion and return — a local `cross-encoder/ms-marco-MiniLM-L-6-v2` runs the top-20 fused candidates in a single batch on CPU, picks the top-5, and adds well under a second of latency. This would also reduce the load the agent currently puts on `verify_and_finalize` to compensate for noisier candidate sets.
 
 ### 3. Contradiction detection is recall-limited
 
 The contradiction checker only operates on the top-K retrieved chunks. If two conflicting documents score below the top-K threshold for a query, the conflict is missed. **Fix:** Run a targeted second retrieval pass specifically for documents in the same category as the already-retrieved set.
 
-### 4. Arabic support is heuristic-only
-
-Language detection uses a Unicode character count heuristic. Mixed-language queries (e.g., Arabic question with English policy codes) may be misclassified. The system always retrieves from the English corpus but only guarantees Arabic *output* — it does not verify that the Arabic answer faithfully translates the English source content. **Fix:** Add a dedicated Arabic NLI translation step.
-
-### 5. Chunking ignores document structure
+### 4. Chunking ignores document structure
 
 The current fixed-size chunking can split a policy clause mid-sentence. Structural chunking (split at section headings, parsed from the markdown headers extracted by PyMuPDF) would improve citation precision. **Fix:** Use heading-aware chunking — detect `##` headers and treat each section as a primary unit.
 
@@ -337,6 +521,6 @@ The current fixed-size chunking can split a policy clause mid-sentence. Structur
 
 1. **Persistent Qdrant + sparse vectors** — Run Qdrant as a Docker service with sparse SPLADE vectors replacing BM25, giving true hybrid search without an in-process index.
 2. **Structured citation spans** — Return character offsets into the source document (not just chunk IDs), enabling the UI to highlight the exact sentence in the original PDF.
-3. **Cross-encoder reranking** — Replace LLM pointwise reranker with a local `ms-marco` cross-encoder for 10× faster reranking at higher precision.
+3. **Cross-encoder reranking** — Add a local `ms-marco` cross-encoder between RRF fusion and the agent (currently no reranker runs), using a single batched CPU inference call to rescore the top-20 fused candidates and return the top-5 — higher precision at well under a second of added latency.
 4. **Version-aware multi-turn** — Track conversation history in LangGraph state so employees can ask follow-up questions ("what about the old policy?") without re-stating context.
 5. **Automatic contradiction discovery** — Offline job that runs `check_contradictions` over all document pairs in the same category and stores the results, so contradiction detection at query time is O(1) lookup rather than an LLM call.

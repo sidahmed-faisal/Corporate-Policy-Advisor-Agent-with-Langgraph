@@ -17,7 +17,7 @@ def get_llm(temperature: float = 0.0) -> BaseChatModel:
     if provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
         return ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model="gemini-3-flash-preview",
             google_api_key=config.GEMINI_API_KEY,
             temperature=temperature,
             convert_system_message_to_human=True,
@@ -26,7 +26,7 @@ def get_llm(temperature: float = 0.0) -> BaseChatModel:
     if provider == "openai":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             openai_api_key=config.OPENAI_API_KEY,
             temperature=temperature,
         )
